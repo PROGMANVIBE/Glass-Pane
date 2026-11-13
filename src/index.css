@@ -1,0 +1,48 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  :root {
+    --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  code, pre, .font-mono {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Windows 11 Scrollbar for the GlassPane Application List */
+.win11-scroll-area {
+  scrollbar-width: thin;
+  scrollbar-color: #4b5563 #181a20;
+}
+
+.win11-scroll-area::-webkit-scrollbar {
+  width: 10px;
+}
+
+.win11-scroll-area::-webkit-scrollbar-track {
+  background: rgba(20, 22, 27, 0.75);
+  border-radius: 999px;
+}
+
+.win11-scroll-area::-webkit-scrollbar-thumb {
+  background: #4b5563;
+  border-radius: 999px;
+  border: 2px solid rgba(20, 22, 27, 0.85);
+}
+
+.win11-scroll-area::-webkit-scrollbar-thumb:hover {
+  background: #6b7280;
+}

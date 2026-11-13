@@ -1,0 +1,8 @@
+{
+  "name": "Remix GlassPane — Windows 11 Window Opacity Utility",
+  "description": "Lightweight Windows 11 system tray utility for controlling per-window transparency with on-window slider overlays and a global opacity master switch.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

@@ -1,0 +1,4 @@
+// GlassPane.rc — Win32 Resource Script for GlassPane.exe
+// Embeds the multi-resolution GlassPane.ico (16x16, 32x32, 48x48) as the main application and system tray icon.
+
+101 ICON "GlassPane.ico"
