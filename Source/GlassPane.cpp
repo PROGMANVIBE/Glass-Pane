@@ -17,6 +17,7 @@
 #include <gdiplus.h>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 #include <string>
 #include <algorithm>
 #include <cwctype>
@@ -185,8 +186,9 @@ static const BrandColorPalette STEAM_PALETTE = {
 };
 
 struct WindowOpacityState {
-    int percent = 75;       // 10% .. 100%
-    bool isActive = false;  // Independent ON/OFF state per window (starts OFF / grayscale until clicked or dragged)
+    int percent = 75;               // 10% .. 100%
+    bool isActive = false;          // Independent ON/OFF state per window (starts OFF / grayscale until clicked or dragged)
+    bool addedLayeredStyle = false; // True if GlassPane added WS_EX_LAYERED to this HWND (so it can be cleanly removed)
 };
 
 struct OpenWindowEntry {
@@ -474,16 +476,46 @@ static void ApplyEffectiveWindowOpacity(HWND hwnd) {
     LONG_PTR exStyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
     if (!shouldApply) {
         if (exStyle & WS_EX_LAYERED) {
-            SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
+            if (it != g_windowStates.end() && it->second.addedLayeredStyle) {
+                SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
+                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, exStyle & ~WS_EX_LAYERED);
+                it->second.addedLayeredStyle = false;
+            } else {
+                SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
+            }
         }
     } else {
         int pct = ClampInt(it->second.percent, MIN_OPACITY_PCT, MAX_OPACITY_PCT);
         BYTE alpha = static_cast<BYTE>((pct * 255) / 100);
 
+        // Process Integrity Handling (UIPI):
+        // Elevated/administrator processes or protected system windows reject SetWindowLongPtrW / SetLayeredWindowAttributes
+        // from a standard-integrity process with ERROR_ACCESS_DENIED. Detect this failure and revert the cached state
+        // immediately so GlassPane never caches a broken active state when access is denied.
+        bool newlyAddedLayered = false;
         if (!(exStyle & WS_EX_LAYERED)) {
-            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, exStyle | WS_EX_LAYERED);
+            SetLastError(0);
+            LONG_PTR prevStyle = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, exStyle | WS_EX_LAYERED);
+            DWORD err = GetLastError();
+            if (prevStyle == 0 && err != 0) {
+                it->second.isActive = false;
+                it->second.percent = 100;
+                it->second.addedLayeredStyle = false;
+                return;
+            }
+            it->second.addedLayeredStyle = true;
+            newlyAddedLayered = true;
         }
-        SetLayeredWindowAttributes(hwnd, 0, alpha, LWA_ALPHA);
+
+        if (!SetLayeredWindowAttributes(hwnd, 0, alpha, LWA_ALPHA)) {
+            if (newlyAddedLayered) {
+                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, exStyle & ~WS_EX_LAYERED);
+            }
+            it->second.isActive = false;
+            it->second.percent = 100;
+            it->second.addedLayeredStyle = false;
+            return;
+        }
     }
 }
 
@@ -497,10 +529,17 @@ static void ApplyAllTrackedWindows() {
 
 static void RestoreAllWindowsOnExit() {
     for (auto& kv : g_windowStates) {
-        if (IsWindow(kv.first)) {
-            LONG_PTR exStyle = GetWindowLongPtrW(kv.first, GWL_EXSTYLE);
+        HWND hwnd = kv.first;
+        if (IsWindow(hwnd)) {
+            LONG_PTR exStyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
             if (exStyle & WS_EX_LAYERED) {
-                SetLayeredWindowAttributes(kv.first, 0, 255, LWA_ALPHA);
+                if (kv.second.addedLayeredStyle) {
+                    SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
+                    SetWindowLongPtrW(hwnd, GWL_EXSTYLE, exStyle & ~WS_EX_LAYERED);
+                    kv.second.addedLayeredStyle = false;
+                } else {
+                    SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
+                }
             }
         }
     }
@@ -527,7 +566,7 @@ static BOOL CALLBACK EnumWindowsCallback(HWND hwnd, LPARAM) {
 
     if (g_windowStates.find(hwnd) == g_windowStates.end()) {
         // Check if window already has layered alpha set externally
-        WindowOpacityState initial = { 75, false };
+        WindowOpacityState initial = { 75, false, false };
         LONG_PTR exStyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
         if (exStyle & WS_EX_LAYERED) {
             BYTE curAlpha = 255;
@@ -557,6 +596,46 @@ static void UpdateScrollBounds(int clientH) {
 static void RefreshOpenWindowsList() {
     g_openWindows.clear();
     EnumWindows(EnumWindowsCallback, 0);
+
+    // Build set of currently active open application HWNDs
+    std::unordered_set<HWND> activeHwnds;
+    activeHwnds.reserve(g_openWindows.size());
+    for (const auto& entry : g_openWindows) {
+        if (IsWindow(entry.hwnd)) {
+            activeHwnds.insert(entry.hwnd);
+        }
+    }
+
+    // Prune stale entries from g_iconCache (freeing Gdiplus::Bitmap* to fix memory leak & HWND reuse)
+    for (auto it = g_iconCache.begin(); it != g_iconCache.end(); ) {
+        HWND hwnd = it->first;
+        if (!IsWindow(hwnd) || activeHwnds.find(hwnd) == activeHwnds.end()) {
+            delete it->second;
+            it = g_iconCache.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    // Prune stale entries from g_windowStates (fixing HWND reuse & cleaning up layered state if hidden)
+    for (auto it = g_windowStates.begin(); it != g_windowStates.end(); ) {
+        HWND hwnd = it->first;
+        if (!IsWindow(hwnd) || activeHwnds.find(hwnd) == activeHwnds.end()) {
+            if (IsWindow(hwnd) && it->second.addedLayeredStyle) {
+                LONG_PTR exStyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+                if (exStyle & WS_EX_LAYERED) {
+                    SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
+                    SetWindowLongPtrW(hwnd, GWL_EXSTYLE, exStyle & ~WS_EX_LAYERED);
+                }
+            }
+            if (g_draggingSliderHwnd == hwnd) {
+                g_draggingSliderHwnd = nullptr;
+            }
+            it = g_windowStates.erase(it);
+        } else {
+            ++it;
+        }
+    }
 
     RECT rc = {};
     GetClientRect(g_hMainWnd, &rc);
