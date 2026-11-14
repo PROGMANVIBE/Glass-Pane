@@ -168,7 +168,11 @@ export function Win11TaskbarAndTray({
                   }}
                   className="px-2.5 py-1 rounded text-[11px] font-semibold bg-[#3898ff] hover:bg-sky-400 text-slate-950 cursor-pointer whitespace-nowrap shrink-0"
                 >
-                  {state.isAppRunning && state.isUtilityWindowOpen ? 'Running' : 'Launch'}
+                  {state.isAppRunning
+                    ? state.isUtilityWindowOpen
+                      ? 'Bring to Front'
+                      : 'Show Window'
+                    : 'Launch'}
                 </button>
               </div>
             </div>

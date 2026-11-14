@@ -46,3 +46,26 @@
 .win11-scroll-area::-webkit-scrollbar-thumb:hover {
   background: #6b7280;
 }
+
+@keyframes glasspane-marquee {
+  0% {
+    transform: translate3d(0%, 0, 0);
+  }
+  100% {
+    transform: translate3d(-50%, 0, 0);
+  }
+}
+
+.glasspane-marquee-track {
+  display: inline-flex;
+  align-items: center;
+  width: max-content;
+  will-change: transform;
+  animation: glasspane-marquee 11s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .glasspane-marquee-track {
+    animation-duration: 24s;
+  }
+}

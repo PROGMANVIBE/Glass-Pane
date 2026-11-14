@@ -74,7 +74,9 @@ export function SimulatedDesktopWindow({
   const handleTitleBarPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!isDragging) return;
     setIsDragging(false);
-    e.currentTarget.releasePointerCapture(e.pointerId);
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
   };
 
   return (
@@ -101,6 +103,7 @@ export function SimulatedDesktopWindow({
         onPointerDown={handleTitleBarPointerDown}
         onPointerMove={handleTitleBarPointerMove}
         onPointerUp={handleTitleBarPointerUp}
+        onPointerCancel={handleTitleBarPointerUp}
         className="h-9 px-3 bg-slate-950/90 border-b border-slate-800/90 flex items-center justify-between cursor-move shrink-0"
       >
         <div className="flex items-center gap-2 min-w-0">

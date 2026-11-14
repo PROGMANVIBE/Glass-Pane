@@ -27,6 +27,71 @@ interface GlassPaneUtilityWindowProps {
   onRestoreClosedWindows: () => void;
 }
 
+interface SubWindowMarqueeTitleProps {
+  text: string;
+  isBarActive: boolean;
+  isLight: boolean;
+}
+
+function SubWindowMarqueeTitle({ text, isBarActive, isLight }: SubWindowMarqueeTitleProps) {
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const measureRef = useRef<HTMLSpanElement>(null);
+  const [isOverflowing, setIsOverflowing] = useState(false);
+
+  const checkOverflow = useCallback(() => {
+    const viewportEl = viewportRef.current;
+    const measureEl = measureRef.current;
+    if (!viewportEl || !measureEl) return;
+    setIsOverflowing(measureEl.scrollWidth > viewportEl.clientWidth + 1);
+  }, []);
+
+  useEffect(() => {
+    checkOverflow();
+    const viewportEl = viewportRef.current;
+    if (!viewportEl || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => checkOverflow());
+    observer.observe(viewportEl);
+    return () => observer.disconnect();
+  }, [text, checkOverflow]);
+
+  const colorClass = isBarActive
+    ? isLight
+      ? 'text-slate-700'
+      : 'text-slate-200/85'
+    : isLight
+    ? 'text-slate-500/85'
+    : 'text-slate-400/80';
+
+  return (
+    <div
+      ref={viewportRef}
+      data-testid="subwindow-title-viewport"
+      data-marquee-active={isOverflowing ? 'true' : 'false'}
+      className={`relative w-full overflow-hidden whitespace-nowrap text-[11.5px] leading-tight ${colorClass}`}
+    >
+      {/* Hidden measurement span to detect exact natural text width */}
+      <span
+        ref={measureRef}
+        aria-hidden="true"
+        className="pointer-events-none invisible absolute left-0 top-0 whitespace-nowrap"
+      >
+        {text}
+      </span>
+
+      {isOverflowing ? (
+        <div className="glasspane-marquee-track">
+          <span className="pr-9">{text}</span>
+          <span aria-hidden="true" className="pr-9">
+            {text}
+          </span>
+        </div>
+      ) : (
+        <span className="block truncate">{text}</span>
+      )}
+    </div>
+  );
+}
+
 export function GlassPaneUtilityWindow({
   state,
   onToggleGlobalOpacity,
@@ -64,6 +129,11 @@ export function GlassPaneUtilityWindow({
 
   useEffect(() => {
     updateScrollMetrics();
+    const el = scrollContainerRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => updateScrollMetrics());
+    observer.observe(el);
+    return () => observer.disconnect();
   }, [openWindows.length, state.isUtilityWindowOpen, updateScrollMetrics]);
 
   if (!state.isAppRunning || !state.isUtilityWindowOpen) {
@@ -105,7 +175,9 @@ export function GlassPaneUtilityWindow({
   const handleScrollbarThumbPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!isDraggingScrollbar) return;
     setIsDraggingScrollbar(false);
-    e.currentTarget.releasePointerCapture(e.pointerId);
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
   };
 
   const handleScrollbarTrackClick = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -138,19 +210,6 @@ export function GlassPaneUtilityWindow({
         </div>
 
         <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={onToggleTheme}
-            aria-label={`Switch to ${isLight ? 'dark' : 'light'} Windows 11 theme`}
-            title="Toggle Windows 11 Dark / Light Mica Theme"
-            className={`p-1.5 rounded transition-colors cursor-pointer ${
-              isLight
-                ? 'text-slate-600 hover:bg-slate-200 hover:text-slate-900'
-                : 'text-slate-400 hover:bg-white/10 hover:text-white'
-            }`}
-          >
-            {isLight ? <Moon className="w-3.5 h-3.5" /> : <Sun className="w-3.5 h-3.5" />}
-          </button>
           <button
             type="button"
             onClick={onMinimizeToTray}
@@ -192,11 +251,26 @@ export function GlassPaneUtilityWindow({
         </div>
       </div>
 
-      {/* Top-Right Master ON / OFF Switch Row */}
-      <div className="flex items-center justify-end px-6 pt-1 pb-3">
-        <div className="flex items-center gap-3">
+      {/* Top Row: Theme Toggle Button (left) + Master ON / OFF Switch (right) */}
+      <div className="flex items-center justify-between px-4 pt-1 pb-3">
+        <button
+          type="button"
+          onClick={onToggleTheme}
+          aria-label={`Switch to ${isLight ? 'dark' : 'light'} Windows 11 theme`}
+          title="Toggle Windows 11 Dark / Light Mica Theme"
+          className={`px-3 py-1.5 rounded-md border text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+            isLight
+              ? 'bg-slate-200 border-slate-300 text-slate-700 hover:bg-slate-300/80 hover:text-slate-950'
+              : 'bg-[#262931] border-[#343842] text-slate-300 hover:bg-[#2f333d] hover:text-white'
+          }`}
+        >
+          {isLight ? <Moon className="w-3.5 h-3.5" /> : <Sun className="w-3.5 h-3.5" />}
+          <span>{isLight ? 'Dark UI' : 'Light UI'}</span>
+        </button>
+
+        <div className="flex items-center gap-3 pr-2">
           <span
-            className={`text-sm font-medium tracking-wide select-none ${
+            className={`text-sm font-bold tracking-wide select-none ${
               isLight ? 'text-slate-800' : 'text-slate-100'
             }`}
           >
@@ -231,20 +305,22 @@ export function GlassPaneUtilityWindow({
       {/* Inner Rounded Container holding the Dynamic Open Application List + Right Scrollbar */}
       <div className="px-4 pb-4">
         <div
-          className={`relative rounded-xl border p-3 pr-5 flex items-stretch ${
+          className={`relative rounded-xl border p-3 ${
+            openWindows.length > 4 ? 'pr-5' : 'pr-3'
+          } flex items-stretch ${
             isLight
               ? 'bg-slate-200/75 border-slate-300'
               : 'bg-[#202228]/90 border-[#2e323b]'
           }`}
         >
-          {/* Scrollable Applications Viewport (Supports Mouse Scroll Wheel & Scrollbar Dragging) */}
+          {/* Scrollable Applications Viewport (px-0.5 ensures right & left card borders are never clipped) */}
           <div
             ref={scrollContainerRef}
             onScroll={updateScrollMetrics}
             role="list"
             aria-label="Open Windows List"
             data-testid="open-windows-scroll-container"
-            className="flex-1 space-y-2.5 max-h-[430px] overflow-y-auto pr-1 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]"
+            className="flex-1 space-y-2.5 max-h-[430px] overflow-y-auto px-0.5 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]"
           >
             {openWindows.length === 0 ? (
               <div className="p-6 text-center space-y-2">
@@ -268,6 +344,8 @@ export function GlassPaneUtilityWindow({
                 const isBarActive = win.isTransparencyActive && state.globalOpacityEnabled;
                 const palette = resolveProcessColorScheme(win);
                 const thumbPos = getTrackPositionPercent(win.opacityPercent);
+                const hasDistinctSubtitle =
+                  Boolean(win.windowTitle) && win.windowTitle.trim() !== win.appName.trim();
 
                 const cardStyle: React.CSSProperties = isBarActive
                   ? {
@@ -312,9 +390,9 @@ export function GlassPaneUtilityWindow({
                     data-color-theme={win.hasIdentifiedColorTheme ? 'brand' : 'gold-gradient'}
                     style={cardStyle}
                     onClick={() => onFocusWindow(win.id)}
-                    className="rounded-lg border px-4 py-3 transition-all duration-150 flex items-center justify-between gap-4 select-none"
+                    className="w-full rounded-lg border px-3.5 py-2.5 transition-all duration-150 flex items-center justify-between gap-3.5 select-none box-border"
                   >
-                    {/* Left Side: Click App Icon or Name to Toggle this Application Bar ON (Colored) or OFF (Grayscale) Independently */}
+                    {/* Left Side: Click App Icon, Name, or Sub-Window Title to Toggle this Application Bar ON (Colored) or OFF (Grayscale) */}
                     <button
                       type="button"
                       data-testid={`toggle-app-bar-${win.id}`}
@@ -329,7 +407,7 @@ export function GlassPaneUtilityWindow({
                         e.stopPropagation();
                         onToggleSingleWindow(win.id);
                       }}
-                      className="flex items-center gap-3.5 shrink-0 whitespace-nowrap text-left cursor-pointer focus:outline-none group"
+                      className="flex items-center gap-3 min-w-0 flex-1 text-left cursor-pointer focus:outline-none group overflow-hidden"
                     >
                       <AppWindowIcon
                         appId={win.id}
@@ -337,24 +415,33 @@ export function GlassPaneUtilityWindow({
                         className="w-8 h-8 shrink-0"
                         grayscale={!isBarActive}
                       />
-                      <span
-                        className={`text-[15px] font-medium whitespace-nowrap transition-colors ${
-                          isBarActive
-                            ? isLight
-                              ? 'text-slate-950 font-semibold'
-                              : 'text-white font-medium'
-                            : isLight
-                            ? 'text-slate-500'
-                            : 'text-slate-400'
-                        }`}
-                      >
-                        {win.appName}
-                      </span>
+                      <div className="min-w-0 flex-1 flex flex-col justify-center overflow-hidden">
+                        <span
+                          className={`text-[14.5px] leading-snug truncate transition-colors ${
+                            isBarActive
+                              ? isLight
+                                ? 'text-slate-950 font-bold'
+                                : 'text-white font-bold'
+                              : isLight
+                              ? 'text-slate-500 font-semibold'
+                              : 'text-slate-400 font-semibold'
+                          }`}
+                        >
+                          {win.appName}
+                        </span>
+                        {hasDistinctSubtitle && (
+                          <SubWindowMarqueeTitle
+                            text={win.windowTitle}
+                            isBarActive={isBarActive}
+                            isLight={isLight}
+                          />
+                        )}
+                      </div>
                     </button>
 
-                    {/* Right Side: Horizontal Tick-Marked Opacity Slider Nested Inside Rectangle */}
+                    {/* Right Side: Horizontal Tick-Marked Opacity Slider Nested Cleanly Inside Closed Card Border */}
                     <div
-                      className="w-[216px] shrink-0 flex flex-col justify-center pr-1.5"
+                      className="w-[214px] shrink-0 flex flex-col justify-center pr-4 pl-1"
                       onClick={(e) => e.stopPropagation()}
                     >
                       {/* Top Row: Floating Current Opacity % above Thumb + 100% at right end */}
@@ -362,7 +449,7 @@ export function GlassPaneUtilityWindow({
                         {win.opacityPercent < 94 && (
                           <span
                             style={{ left: `${thumbPos}%` }}
-                            className={`absolute -translate-x-1/2 font-medium whitespace-nowrap ${
+                            className={`absolute -translate-x-1/2 font-bold whitespace-nowrap ${
                               isBarActive
                                 ? isLight
                                   ? 'text-slate-900'
@@ -377,7 +464,7 @@ export function GlassPaneUtilityWindow({
                           type="button"
                           onClick={() => onChangeWindowOpacity(win.id, 100)}
                           style={{ left: '100%' }}
-                          className={`absolute -translate-x-1/2 font-mono tabular-nums cursor-pointer hover:underline whitespace-nowrap ${
+                          className={`absolute -translate-x-1/2 font-mono font-bold tabular-nums cursor-pointer hover:underline whitespace-nowrap ${
                             isBarActive
                               ? isLight
                                 ? 'text-slate-800'
@@ -445,7 +532,7 @@ export function GlassPaneUtilityWindow({
                       </div>
 
                       {/* Bottom Row: Clickable 25%, 50%, 75% Preset Tick Labels */}
-                      <div className="relative h-4 mt-1 text-[11px] font-mono tabular-nums">
+                      <div className="relative h-4 mt-1 text-[11px] font-mono font-bold tabular-nums">
                         {[25, 50, 75].map((tick) => {
                           const tickLeft = getTrackPositionPercent(tick);
                           return (
@@ -490,6 +577,7 @@ export function GlassPaneUtilityWindow({
                 onPointerDown={handleScrollbarThumbPointerDown}
                 onPointerMove={handleScrollbarThumbPointerMove}
                 onPointerUp={handleScrollbarThumbPointerUp}
+                onPointerCancel={handleScrollbarThumbPointerUp}
                 style={{
                   height: `${thumbHeightPercent}%`,
                   top: `${thumbTopPercent}%`,

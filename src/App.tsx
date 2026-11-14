@@ -21,11 +21,7 @@ import { AppWindowIcon, GlassPaneIcon } from './components/AppIcons';
 const WALLPAPER_PATH = '/src/assets/images/win11_bloom_wallpaper_1794593534840.jpg';
 
 export default function App() {
-  const [state, setState] = useState(() => ({
-    ...createInitialGlassPaneState(),
-    isAppRunning: false,
-    isUtilityWindowOpen: false,
-  }));
+  const [state, setState] = useState(() => createInitialGlassPaneState());
   const [wallpaperFailed, setWallpaperFailed] = useState(false);
   const [selectedDesktopIcon, setSelectedDesktopIcon] = useState<string | null>('glasspane-exe');
 
@@ -156,13 +152,14 @@ export default function App() {
         aria-label="Windows 11 Desktop Application Shortcuts"
         className="fixed left-2.5 top-3 bottom-14 z-[15] flex flex-col flex-wrap gap-1.5 content-start"
       >
-        {/* Standalone GlassPane.exe Desktop Icon — Double-Click to Launch */}
+        {/* Standalone GlassPane.exe Desktop Icon — Single-Instance Launch / Bring to Front */}
         <button
           type="button"
           data-testid="desktop-shortcut-glasspane-exe"
           onClick={(e) => {
             e.stopPropagation();
             setSelectedDesktopIcon('glasspane-exe');
+            handleRelaunchApp();
           }}
           onDoubleClick={(e) => {
             e.stopPropagation();
@@ -174,7 +171,11 @@ export default function App() {
               handleRelaunchApp();
             }
           }}
-          title="Double-click GlassPane.exe to launch the application and system tray icon"
+          title={
+            state.isAppRunning
+              ? 'GlassPane.exe is already running (Click to bring up the GlassPane window)'
+              : 'Click GlassPane.exe to launch the application and system tray icon'
+          }
           className={`w-[74px] py-2 px-1 rounded-lg flex flex-col items-center gap-1 text-center transition-colors cursor-pointer group border ${
             selectedDesktopIcon === 'glasspane-exe'
               ? 'bg-sky-500/20 border-sky-400/50'

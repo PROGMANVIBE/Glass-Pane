@@ -92,3 +92,18 @@ test('toggleGlobalMasterOpacity and exitGlassPaneApp restore 100% solid opacity 
   assert.equal(relaunched.isUtilityWindowOpen, true);
   assert.equal(computeEffectiveOpacity(discord, relaunched), 50);
 });
+
+test('relaunchGlassPaneApp enforces single-instance activation by bringing up the utility window without resetting state when already running', () => {
+  const initial = createInitialGlassPaneState();
+  const hiddenToTray = {
+    ...initial,
+    isAppRunning: true,
+    isUtilityWindowOpen: false,
+    selectedWindowId: 'win-firefox',
+  };
+
+  const activated = relaunchGlassPaneApp(hiddenToTray);
+  assert.equal(activated.isAppRunning, true);
+  assert.equal(activated.isUtilityWindowOpen, true);
+  assert.equal(activated.selectedWindowId, 'win-firefox');
+});

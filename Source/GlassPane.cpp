@@ -21,6 +21,7 @@
 #include <string>
 #include <algorithm>
 #include <cwctype>
+#include <cmath>
 
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "shell32.lib")
@@ -50,6 +51,7 @@ constexpr UINT ID_TRAY_TOGGLE_ALL  = 1002;
 constexpr UINT ID_TRAY_RESTORE_ALL = 1003;
 constexpr UINT ID_TRAY_EXIT        = 1004;
 constexpr UINT ID_TIMER_ENUM       = 3001;
+constexpr UINT ID_TIMER_MARQUEE    = 3002;
 
 constexpr int MIN_OPACITY_PCT      = 10;
 constexpr int MAX_OPACITY_PCT      = 100;
@@ -65,8 +67,11 @@ constexpr int CONTAINER_BOTTOM_PAD = 16;
 constexpr int CONTAINER_PAD        = 12;
 constexpr int CARD_HEIGHT          = 66;
 constexpr int CARD_GAP             = 10;
-constexpr int SLIDER_WIDTH         = 210;
-constexpr int SLIDER_RIGHT_PAD     = 18;
+constexpr float CARD_INSET_X       = 1.0f;
+constexpr int SLIDER_WIDTH         = 200;
+constexpr int SLIDER_RIGHT_PAD     = 26;
+constexpr float MARQUEE_GAP_PX     = 36.0f;
+constexpr float MARQUEE_STEP_PX    = 1.25f;
 
 static int ClampInt(int val, int lo, int hi) {
     if (val < lo) return lo;
@@ -200,24 +205,29 @@ struct OpenWindowEntry {
     Gdiplus::Bitmap* iconBitmap = nullptr;
 };
 
-static ULONG_PTR g_gdiplusToken  = 0;
-static NOTIFYICONDATAW g_nid     = {};
-static HWND g_hMainWnd           = nullptr;
-static HICON g_hAppIcon          = nullptr;
+static ULONG_PTR g_gdiplusToken          = 0;
+static NOTIFYICONDATAW g_nid             = {};
+static HWND g_hMainWnd                   = nullptr;
+static HICON g_hAppIcon                  = nullptr;
+static HANDLE g_hSingleInstanceMutex     = nullptr;
+static UINT g_wmActivateInstance         = 0;
+static UINT g_wmTaskbarCreated           = 0;
 
-static bool g_globalMasterOn     = true;
-static bool g_isLightTheme       = false;
+static bool g_globalMasterOn             = true;
+static bool g_isLightTheme               = false;
 static std::vector<OpenWindowEntry> g_openWindows;
 static std::unordered_map<HWND, WindowOpacityState> g_windowStates;
 static std::unordered_map<HWND, Gdiplus::Bitmap*> g_iconCache;
 
-// Scroll and interaction states
-static int g_scrollOffsetPx      = 0;
-static int g_maxScrollPx         = 0;
-static HWND g_draggingSliderHwnd = nullptr;
-static bool g_isDraggingScrollbar = false;
-static int g_scrollbarDragStartY = 0;
-static int g_scrollbarStartOffset = 0;
+// Scroll, marquee, and interaction states
+static int g_scrollOffsetPx              = 0;
+static int g_maxScrollPx                 = 0;
+static float g_marqueeOffsetPx           = 0.0f;
+static bool g_hasOverflowingSubtitles    = false;
+static HWND g_draggingSliderHwnd         = nullptr;
+static bool g_isDraggingScrollbar        = false;
+static int g_scrollbarDragStartY         = 0;
+static int g_scrollbarStartOffset        = 0;
 
 static std::wstring ToLowerW(const std::wstring& str) {
     std::wstring out = str;
@@ -779,7 +789,16 @@ static void PaintGlassPaneCanvas(HDC hdc, int width, int height) {
         contH - CONTAINER_PAD * 2
     );
 
-    g.SetClip(viewportRect);
+    // Expand horizontal clip slightly so anti-aliased 1px card borders on left & right are never clipped
+    Gdiplus::RectF clipRect(
+        viewportRect.X - 1.5f,
+        viewportRect.Y,
+        viewportRect.Width + 3.0f,
+        viewportRect.Height
+    );
+    g.SetClip(clipRect);
+
+    bool anySubtitleOverflow = false;
 
     if (g_openWindows.empty()) {
         Gdiplus::SolidBrush emptyBrush(Gdiplus::Color(255, 148, 163, 184));
@@ -809,7 +828,13 @@ static void PaintGlassPaneCanvas(HDC hdc, int width, int height) {
                 continue; // Outside visible scroll viewport
             }
 
-            Gdiplus::RectF cardRect(viewportRect.X, cardY, viewportRect.Width, static_cast<float>(CARD_HEIGHT));
+            // Inset cardRect horizontally by CARD_INSET_X so its right border is 100% closed and never cut off
+            Gdiplus::RectF cardRect(
+                viewportRect.X + CARD_INSET_X,
+                cardY,
+                viewportRect.Width - CARD_INSET_X * 2.0f,
+                static_cast<float>(CARD_HEIGHT)
+            );
             Gdiplus::GraphicsPath cardPath;
             AddRoundedRectPath(cardPath, cardRect, 8.0f);
 
@@ -847,7 +872,7 @@ static void PaintGlassPaneCanvas(HDC hdc, int width, int height) {
 
             float textLeft = iconX + 32.0f + 12.0f;
             float sliderLeft = cardRect.X + cardRect.Width - static_cast<float>(SLIDER_WIDTH) - static_cast<float>(SLIDER_RIGHT_PAD);
-            float textMaxW = sliderLeft - textLeft - 12.0f;
+            float textMaxW = sliderLeft - textLeft - 14.0f;
 
             Gdiplus::Color titleColor = isBarActive
                 ? (g_isLightTheme ? Gdiplus::Color(255, 15, 23, 42) : Gdiplus::Color(255, 255, 255, 255))
@@ -868,7 +893,35 @@ static void PaintGlassPaneCanvas(HDC hdc, int width, int height) {
                 Gdiplus::RectF nameRect(textLeft, cardRect.Y + 12.0f, textMaxW, 22.0f);
                 Gdiplus::RectF subRect(textLeft, cardRect.Y + 34.0f, textMaxW, 18.0f);
                 g.DrawString(win.appName.c_str(), -1, &fontAppName, nameRect, &sfEllipsis, &titleBrush);
-                g.DrawString(win.windowTitle.c_str(), -1, &fontSubtitle, subRect, &sfEllipsis, &subBrush);
+
+                // Measure full sub-window title width; if it overflows textMaxW, scroll continuously in a seamless marquee loop
+                Gdiplus::StringFormat sfNoWrap(Gdiplus::StringFormat::GenericTypographic());
+                sfNoWrap.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap | Gdiplus::StringFormatFlagsMeasureTrailingSpaces);
+                sfNoWrap.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+
+                Gdiplus::RectF measuredBox;
+                g.MeasureString(win.windowTitle.c_str(), -1, &fontSubtitle, Gdiplus::PointF(0.0f, 0.0f), &sfNoWrap, &measuredBox);
+
+                if (measuredBox.Width > textMaxW + 1.0f && textMaxW > 20.0f) {
+                    anySubtitleOverflow = true;
+                    float loopSpan = measuredBox.Width + MARQUEE_GAP_PX;
+                    float scrollShift = std::fmod(g_marqueeOffsetPx, loopSpan);
+
+                    Gdiplus::GraphicsState savedState = g.Save();
+                    g.SetClip(subRect, Gdiplus::CombineModeIntersect);
+
+                    float drawX1 = textLeft - scrollShift;
+                    float drawX2 = drawX1 + loopSpan;
+                    Gdiplus::RectF copy1Rect(drawX1, subRect.Y, measuredBox.Width + 8.0f, subRect.Height);
+                    Gdiplus::RectF copy2Rect(drawX2, subRect.Y, measuredBox.Width + 8.0f, subRect.Height);
+
+                    g.DrawString(win.windowTitle.c_str(), -1, &fontSubtitle, copy1Rect, &sfNoWrap, &subBrush);
+                    g.DrawString(win.windowTitle.c_str(), -1, &fontSubtitle, copy2Rect, &sfNoWrap, &subBrush);
+
+                    g.Restore(savedState);
+                } else {
+                    g.DrawString(win.windowTitle.c_str(), -1, &fontSubtitle, subRect, &sfEllipsis, &subBrush);
+                }
             } else {
                 Gdiplus::RectF nameRect(textLeft, cardRect.Y, textMaxW, cardRect.Height);
                 g.DrawString(win.appName.c_str(), -1, &fontAppName, nameRect, &sfEllipsis, &titleBrush);
@@ -952,6 +1005,7 @@ static void PaintGlassPaneCanvas(HDC hdc, int width, int height) {
         }
     }
 
+    g_hasOverflowingSubtitles = anySubtitleOverflow;
     g.ResetClip();
 
     // 5. Right-Hand Custom Scrollbar Track & Draggable Thumb
@@ -1054,7 +1108,9 @@ static void HandleClientMouseDown(HWND hwnd, int mx, int my) {
         const auto& win = g_openWindows[i];
         float cardY = vpY + static_cast<float>(i * (CARD_HEIGHT + CARD_GAP)) - static_cast<float>(g_scrollOffsetPx);
         if (my >= cardY && my <= cardY + CARD_HEIGHT) {
-            float sliderLeft = vpX + vpW - static_cast<float>(SLIDER_WIDTH) - static_cast<float>(SLIDER_RIGHT_PAD);
+            float cardLeft = vpX + CARD_INSET_X;
+            float cardW = vpW - CARD_INSET_X * 2.0f;
+            float sliderLeft = cardLeft + cardW - static_cast<float>(SLIDER_WIDTH) - static_cast<float>(SLIDER_RIGHT_PAD);
             float trackW = static_cast<float>(SLIDER_WIDTH);
 
             // Did the user click inside the right-hand slider area?
@@ -1109,7 +1165,9 @@ static void HandleClientMouseMove(HWND hwnd, int mx, int my) {
         float contW = static_cast<float>(width - OUTER_PAD_X * 2);
         float vpX = contX + CONTAINER_PAD;
         float vpW = contW - CONTAINER_PAD - rightReserve;
-        float sliderLeft = vpX + vpW - static_cast<float>(SLIDER_WIDTH) - static_cast<float>(SLIDER_RIGHT_PAD);
+        float cardLeft = vpX + CARD_INSET_X;
+        float cardW = vpW - CARD_INSET_X * 2.0f;
+        float sliderLeft = cardLeft + cardW - static_cast<float>(SLIDER_WIDTH) - static_cast<float>(SLIDER_RIGHT_PAD);
         float trackW = static_cast<float>(SLIDER_WIDTH);
 
         int newPct = GetPercentFromTrackX(static_cast<float>(mx), sliderLeft, trackW);
@@ -1149,10 +1207,35 @@ static void ShowTrayContextMenu(HWND hwnd) {
     DestroyMenu(hMenu);
 }
 
+static void ActivateAndShowMainWindow(HWND hwnd) {
+    RefreshOpenWindowsList();
+    if (IsIconic(hwnd)) {
+        ShowWindow(hwnd, SW_RESTORE);
+    } else {
+        ShowWindow(hwnd, SW_SHOW);
+    }
+    SetForegroundWindow(hwnd);
+    BringWindowToTop(hwnd);
+    InvalidateRect(hwnd, nullptr, FALSE);
+}
+
 static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    if (g_wmActivateInstance != 0 && msg == g_wmActivateInstance) {
+        ActivateAndShowMainWindow(hwnd);
+        return 0;
+    }
+    if (g_wmTaskbarCreated != 0 && msg == g_wmTaskbarCreated) {
+        Shell_NotifyIconW(NIM_ADD, &g_nid);
+        return 0;
+    }
+
     switch (msg) {
     case WM_CREATE:
         SetTimer(hwnd, ID_TIMER_ENUM, 2000, nullptr);
+        SetTimer(hwnd, ID_TIMER_MARQUEE, 33, nullptr);
+        if (g_wmActivateInstance != 0) {
+            ChangeWindowMessageFilterEx(hwnd, g_wmActivateInstance, MSGFLT_ALLOW, nullptr);
+        }
         return 0;
 
     case WM_ERASEBKGND:
@@ -1199,6 +1282,14 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         }
         return 0;
 
+    case WM_CAPTURECHANGED:
+        if (g_draggingSliderHwnd || g_isDraggingScrollbar) {
+            g_draggingSliderHwnd = nullptr;
+            g_isDraggingScrollbar = false;
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
+        return 0;
+
     case WM_MOUSEWHEEL: {
         if (g_maxScrollPx > 0) {
             int delta = GET_WHEEL_DELTA_WPARAM(wParam);
@@ -1209,8 +1300,14 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
     }
 
     case WM_TIMER:
-        if (wParam == ID_TIMER_ENUM && IsWindowVisible(hwnd) && !g_draggingSliderHwnd && !g_isDraggingScrollbar) {
+        if (wParam == ID_TIMER_ENUM && IsWindowVisible(hwnd) && !IsIconic(hwnd) && !g_draggingSliderHwnd && !g_isDraggingScrollbar) {
             RefreshOpenWindowsList();
+        } else if (wParam == ID_TIMER_MARQUEE && IsWindowVisible(hwnd) && !IsIconic(hwnd) && g_hasOverflowingSubtitles) {
+            g_marqueeOffsetPx += MARQUEE_STEP_PX;
+            if (g_marqueeOffsetPx > 100000.0f) {
+                g_marqueeOffsetPx = std::fmod(g_marqueeOffsetPx, 10000.0f);
+            }
+            InvalidateRect(hwnd, nullptr, FALSE);
         }
         return 0;
 
@@ -1218,9 +1315,7 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         UINT id = LOWORD(wParam);
         switch (id) {
         case ID_TRAY_OPEN:
-            RefreshOpenWindowsList();
-            ShowWindow(hwnd, SW_SHOW);
-            SetForegroundWindow(hwnd);
+            ActivateAndShowMainWindow(hwnd);
             return 0;
 
         case ID_TRAY_TOGGLE_ALL:
@@ -1249,12 +1344,10 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 
     case WM_TRAYICON:
         if (lParam == WM_LBUTTONUP) {
-            if (IsWindowVisible(hwnd)) {
+            if (IsWindowVisible(hwnd) && !IsIconic(hwnd)) {
                 ShowWindow(hwnd, SW_HIDE);
             } else {
-                RefreshOpenWindowsList();
-                ShowWindow(hwnd, SW_SHOW);
-                SetForegroundWindow(hwnd);
+                ActivateAndShowMainWindow(hwnd);
             }
         } else if (lParam == WM_RBUTTONUP || lParam == WM_CONTEXTMENU) {
             ShowTrayContextMenu(hwnd);
@@ -1267,8 +1360,11 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         return 0;
 
     case WM_DESTROY:
+        KillTimer(hwnd, ID_TIMER_ENUM);
+        KillTimer(hwnd, ID_TIMER_MARQUEE);
         RestoreAllWindowsOnExit();
         Shell_NotifyIconW(NIM_DELETE, &g_nid);
+        g_openWindows.clear();
         for (auto& kv : g_iconCache) {
             delete kv.second;
         }
@@ -1280,6 +1376,31 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 }
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int) {
+    g_wmActivateInstance = RegisterWindowMessageW(L"GlassPane_Win11_SingleInstance_Activate");
+    g_wmTaskbarCreated   = RegisterWindowMessageW(L"TaskbarCreated");
+
+    // Single-Instance Guard: Prevent multiple instances of GlassPane.exe from running simultaneously.
+    // If an instance is already running, bring its window up and exit immediately.
+    g_hSingleInstanceMutex = CreateMutexW(nullptr, TRUE, L"Local\\GlassPane_Win11_SingleInstance_Mutex");
+    if (g_hSingleInstanceMutex && GetLastError() == ERROR_ALREADY_EXISTS) {
+        HWND hExisting = FindWindowW(L"GlassPaneWin11Class", nullptr);
+        if (hExisting) {
+            AllowSetForegroundWindow(ASFW_ANY);
+            if (g_wmActivateInstance != 0) {
+                PostMessageW(hExisting, g_wmActivateInstance, 0, 0);
+            }
+            if (IsIconic(hExisting)) {
+                ShowWindow(hExisting, SW_RESTORE);
+            } else {
+                ShowWindow(hExisting, SW_SHOW);
+            }
+            SetForegroundWindow(hExisting);
+        }
+        CloseHandle(g_hSingleInstanceMutex);
+        g_hSingleInstanceMutex = nullptr;
+        return 0;
+    }
+
     Gdiplus::GdiplusStartupInput gdiplusStartupInput;
     Gdiplus::GdiplusStartup(&g_gdiplusToken, &gdiplusStartupInput, nullptr);
 
@@ -1349,6 +1470,11 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int) {
 
     if (g_gdiplusToken) {
         Gdiplus::GdiplusShutdown(g_gdiplusToken);
+    }
+    if (g_hSingleInstanceMutex) {
+        ReleaseMutex(g_hSingleInstanceMutex);
+        CloseHandle(g_hSingleInstanceMutex);
+        g_hSingleInstanceMutex = nullptr;
     }
     return static_cast<int>(msg.wParam);
 }

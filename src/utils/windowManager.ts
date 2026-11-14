@@ -365,10 +365,25 @@ export function exitGlassPaneApp(state: GlassPaneState): GlassPaneState {
 }
 
 /**
- * Relaunches GlassPane.exe into the Windows 11 system tray.
+ * Launches or activates GlassPane.exe (Single-Instance Enforcement):
+ * - If GlassPane.exe is already running, it does NOT spawn a duplicate instance or reset state;
+ *   it brings the existing GlassPane utility window up to the foreground.
+ * - If GlassPane.exe is not running, it starts the single instance and opens the utility window.
  */
 export function relaunchGlassPaneApp(state: GlassPaneState): GlassPaneState {
   const openWins = getOpenApplicationWindows(state.processes);
+  if (state.isAppRunning) {
+    return {
+      ...state,
+      isUtilityWindowOpen: true,
+      selectedWindowId:
+        state.selectedWindowId && openWins.some((w) => w.id === state.selectedWindowId)
+          ? state.selectedWindowId
+          : openWins.length > 0
+          ? openWins[0].id
+          : null,
+    };
+  }
   return {
     ...state,
     isAppRunning: true,
@@ -384,7 +399,7 @@ export const INITIAL_PROCESSES: ProcessEntry[] = [
     pid: 19304,
     processName: 'Discord.exe',
     appName: 'Discord',
-    windowTitle: '#win32-engineering · Discord',
+    windowTitle: '15%gang - Discord',
     category: 'communication',
     hasOpenWindow: true,
     isBackgroundProcess: false,
@@ -412,7 +427,7 @@ export const INITIAL_PROCESSES: ProcessEntry[] = [
     pid: 14820,
     processName: 'firefox.exe',
     appName: 'Firefox',
-    windowTitle: 'Layered Windows API — Mozilla Firefox',
+    windowTitle: 'GlassPane — Windows 11 Window Opacity Controller — Mozilla Firefox',
     category: 'browser',
     hasOpenWindow: true,
     isBackgroundProcess: false,
@@ -440,7 +455,7 @@ export const INITIAL_PROCESSES: ProcessEntry[] = [
     pid: 11208,
     processName: 'Spotify.exe',
     appName: 'Spotify',
-    windowTitle: 'Tycho — Dive · Spotify',
+    windowTitle: 'Robert Gromotka - Wherever You Go (Ambient Mix) · Spotify',
     category: 'media',
     hasOpenWindow: true,
     isBackgroundProcess: false,
@@ -468,7 +483,7 @@ export const INITIAL_PROCESSES: ProcessEntry[] = [
     pid: 22410,
     processName: 'chrome.exe',
     appName: 'Google Chrome',
-    windowTitle: 'Desktop Composition — Google Chrome',
+    windowTitle: 'Desktop Composition & Layered Windows API — Google Chrome',
     category: 'browser',
     hasOpenWindow: true,
     isBackgroundProcess: false,
