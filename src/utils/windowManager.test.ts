@@ -14,6 +14,8 @@ import {
   spawnCustomApplicationWindow,
   resolveProcessColorScheme,
   DEFAULT_GOLD_BRAND_COLORS,
+  TEXT_FOCUS_READABILITY_FLOOR,
+  toggleTextFocusMode,
   exitGlassPaneApp,
   relaunchGlassPaneApp,
   createInitialGlassPaneState,
@@ -106,4 +108,21 @@ test('relaunchGlassPaneApp enforces single-instance activation by bringing up th
   assert.equal(activated.isAppRunning, true);
   assert.equal(activated.isUtilityWindowOpen, true);
   assert.equal(activated.selectedWindowId, 'win-firefox');
+});
+
+test('toggleTextFocusMode boosts focused or hovered transparent windows to TEXT_FOCUS_READABILITY_FLOOR while keeping unfocused background windows at their slider opacity', () => {
+  const initial = createInitialGlassPaneState();
+  assert.equal(initial.textFocusEnabled, false);
+
+  const withTextFocus = toggleTextFocusMode(initial);
+  assert.equal(withTextFocus.textFocusEnabled, true);
+
+  // Discord is focused (selectedWindowId === 'win-discord') and configured at 50% opacity
+  const discord = withTextFocus.processes.find((p) => p.id === 'win-discord')!;
+  // Chrome is unfocused and configured at 50% opacity
+  const chrome = withTextFocus.processes.find((p) => p.id === 'win-chrome')!;
+
+  assert.equal(computeEffectiveOpacity(discord, withTextFocus), TEXT_FOCUS_READABILITY_FLOOR);
+  assert.equal(computeEffectiveOpacity(chrome, withTextFocus), 50);
+  assert.equal(computeEffectiveOpacity(chrome, withTextFocus, { isHovered: true }), TEXT_FOCUS_READABILITY_FLOOR);
 });

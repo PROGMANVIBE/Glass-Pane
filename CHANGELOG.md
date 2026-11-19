@@ -4,6 +4,14 @@ All notable changes to the GlassPane application since its initial release are d
 
 ---
 
+## [1.4.2] - 2026-11-18
+
+### Added
+- Added `.github/workflows/release.yml` GitHub Actions workflow to automatically compile `GlassPane.exe` from the `/Source` directory using MinGW-w64 (`windres` + `g++`) and attach it whenever a new GitHub Release is published.
+- Added manual `workflow_dispatch` support (`release_tag` input supporting any release tag or `latest`) to compile and attach `GlassPane.exe` to any chosen GitHub Release on demand.
+
+---
+
 ## [1.4.1] - 2026-11-14
 
 ### Changed

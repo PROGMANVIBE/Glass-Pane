@@ -45,13 +45,20 @@ export function SimulatedDesktopWindow({
   onMoveWindow,
 }: SimulatedDesktopWindowProps) {
   const [isDragging, setIsDragging] = useState(false);
+  const [isHovered, setIsHovered] = useState(false);
   const dragOffset = useRef({ x: 0, y: 0 });
 
   if (process.isClosed || process.isMinimized || !process.hasOpenWindow || process.isBackgroundProcess) {
     return null;
   }
 
-  const effectiveOpacity = computeEffectiveOpacity(process, state);
+  const effectiveOpacity = computeEffectiveOpacity(process, state, { isHovered });
+  const isTransparent =
+    state.isAppRunning &&
+    state.globalOpacityEnabled &&
+    process.isTransparencyActive &&
+    process.opacityPercent < 100;
+  const isTextFocusActive = Boolean(state.textFocusEnabled && isTransparent);
 
   const handleTitleBarPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if ((e.target as HTMLElement).closest('button')) return;
@@ -90,13 +97,18 @@ export function SimulatedDesktopWindow({
         opacity: effectiveOpacity / 100,
       }}
       onMouseDown={() => onFocusWindow(process.id)}
-      className={`fixed select-none rounded-xl overflow-hidden flex flex-col border transition-opacity duration-75 shadow-2xl ${
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+      className={`fixed select-none rounded-xl overflow-hidden flex flex-col border transition-opacity duration-100 shadow-2xl ${
         isSelected
           ? 'border-sky-400/70 ring-1 ring-sky-400/30'
           : 'border-slate-700/80'
+      } ${
+        isTextFocusActive ? 'backdrop-blur-md' : ''
       } bg-slate-900 text-slate-100`}
       data-testid={`desktop-window-${process.id}`}
       data-effective-opacity={effectiveOpacity}
+      data-text-focus-active={isTextFocusActive ? 'true' : 'false'}
     >
       {/* Windows 11 Standard Title Bar */}
       <div
@@ -113,7 +125,13 @@ export function SimulatedDesktopWindow({
             className="w-4 h-4 shrink-0"
             grayscale={false}
           />
-          <span className="text-xs font-medium text-slate-200 truncate">
+          <span
+            className={`text-xs font-medium truncate ${
+              isTextFocusActive
+                ? 'text-white font-semibold drop-shadow-[0_1px_2px_rgba(0,0,0,0.95)]'
+                : 'text-slate-200'
+            }`}
+          >
             {process.windowTitle}
           </span>
         </div>
@@ -157,7 +175,13 @@ export function SimulatedDesktopWindow({
       </div>
 
       {/* Realistic Application Window Body Content */}
-      <div className="flex-1 overflow-hidden flex flex-col">
+      <div
+        className={`flex-1 overflow-hidden flex flex-col ${
+          isTextFocusActive
+            ? '[&_p]:text-white [&_p]:font-medium [&_p]:drop-shadow-[0_1px_2px_rgba(0,0,0,0.95)] [&_span]:drop-shadow-[0_1px_2px_rgba(0,0,0,0.9)] [&_h3]:drop-shadow-[0_1px_3px_rgba(0,0,0,0.95)]'
+            : ''
+        }`}
+      >
         {process.id === 'win-discord' && <DiscordWindowBody effectiveOpacity={effectiveOpacity} />}
         {process.id === 'win-firefox' && <FirefoxWindowBody effectiveOpacity={effectiveOpacity} />}
         {process.id === 'win-spotify' && <SpotifyWindowBody />}

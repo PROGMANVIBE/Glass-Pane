@@ -82,6 +82,12 @@ export interface GlassPaneState {
   isUtilityWindowOpen: boolean;
   /** Master ON/OFF switch at the top of the application for all applications */
   globalOpacityEnabled: boolean;
+  /**
+   * Text Focus mode: Uses safe DWM Acrylic/Mica backdrop blur + an automatic readability
+   * floor (82%) on focused/hovered transparent windows and high-contrast text rendering
+   * without LWA_COLORKEY click-through holes or Magnifier overlays.
+   */
+  textFocusEnabled: boolean;
   /** Currently focused desktop window ID */
   selectedWindowId: string | null;
   /** Windows 11 theme mode for the utility */
@@ -92,6 +98,7 @@ export interface GlassPaneState {
 
 export const MIN_OPACITY_PERCENT = 10;
 export const MAX_OPACITY_PERCENT = 100;
+export const TEXT_FOCUS_READABILITY_FLOOR = 82;
 
 /**
  * Returns the identified brand color scheme for a process, or the default Gold Gradient
@@ -134,11 +141,14 @@ export function alphaByteToPercent(alphaByte: number): number {
  * 1. If GlassPane.exe is exited (!state.isAppRunning), all windows revert to 100% opaque.
  * 2. If the master top toggle (state.globalOpacityEnabled) is OFF, all windows revert to 100% opaque.
  * 3. If the individual application bar is toggled OFF (!proc.isTransparencyActive), it renders at 100% opaque.
- * 4. Otherwise, it renders at its configured opacityPercent.
+ * 4. If Text Focus is ON (state.textFocusEnabled) and the transparent window is currently focused or hovered,
+ *    its effective opacity is boosted to at least TEXT_FOCUS_READABILITY_FLOOR (82%) for crisp text legibility.
+ * 5. Otherwise, it renders at its configured opacityPercent.
  */
 export function computeEffectiveOpacity(
-  proc: Pick<ProcessEntry, 'opacityPercent' | 'isTransparencyActive'>,
-  state: Pick<GlassPaneState, 'isAppRunning' | 'globalOpacityEnabled'>
+  proc: Pick<ProcessEntry, 'id' | 'opacityPercent' | 'isTransparencyActive'> | Pick<ProcessEntry, 'opacityPercent' | 'isTransparencyActive'>,
+  state: Pick<GlassPaneState, 'isAppRunning' | 'globalOpacityEnabled'> & Partial<Pick<GlassPaneState, 'textFocusEnabled' | 'selectedWindowId'>>,
+  options?: { isHovered?: boolean }
 ): number {
   if (!state.isAppRunning || !state.globalOpacityEnabled) {
     return 100;
@@ -146,7 +156,18 @@ export function computeEffectiveOpacity(
   if (!proc.isTransparencyActive) {
     return 100;
   }
-  return clampOpacity(proc.opacityPercent);
+  const baseOpacity = clampOpacity(proc.opacityPercent);
+  if (baseOpacity >= 100) {
+    return 100;
+  }
+  if (state.textFocusEnabled) {
+    const procId = 'id' in proc ? proc.id : undefined;
+    const isFocused = Boolean(procId && state.selectedWindowId === procId);
+    if (isFocused || options?.isHovered) {
+      return Math.max(baseOpacity, TEXT_FOCUS_READABILITY_FLOOR);
+    }
+  }
+  return baseOpacity;
 }
 
 /**
@@ -245,6 +266,20 @@ export function toggleGlobalMasterOpacity(
   return {
     ...state,
     globalOpacityEnabled: nextGlobal,
+  };
+}
+
+/**
+ * Toggles the "Text Focus" readability mode on or off.
+ */
+export function toggleTextFocusMode(
+  state: GlassPaneState,
+  explicitValue?: boolean
+): GlassPaneState {
+  const nextTextFocus = explicitValue !== undefined ? explicitValue : !state.textFocusEnabled;
+  return {
+    ...state,
+    textFocusEnabled: nextTextFocus,
   };
 }
 
@@ -659,6 +694,7 @@ export function createInitialGlassPaneState(): GlassPaneState {
     isAppRunning: true,
     isUtilityWindowOpen: true,
     globalOpacityEnabled: true,
+    textFocusEnabled: false,
     selectedWindowId: 'win-discord',
     win11Theme: 'dark',
     processes: INITIAL_PROCESSES,

@@ -6,6 +6,7 @@ import {
   Sun,
   Moon,
   PlusCircle,
+  Type,
 } from 'lucide-react';
 import {
   GlassPaneState,
@@ -19,6 +20,7 @@ import { AppWindowIcon, GlassPaneIcon } from './AppIcons';
 interface GlassPaneUtilityWindowProps {
   state: GlassPaneState;
   onToggleGlobalOpacity: () => void;
+  onToggleTextFocus: () => void;
   onToggleSingleWindow: (id: string) => void;
   onFocusWindow: (id: string) => void;
   onChangeWindowOpacity: (id: string, newPercent: number) => void;
@@ -95,6 +97,7 @@ function SubWindowMarqueeTitle({ text, isBarActive, isLight }: SubWindowMarqueeT
 export function GlassPaneUtilityWindow({
   state,
   onToggleGlobalOpacity,
+  onToggleTextFocus,
   onToggleSingleWindow,
   onFocusWindow,
   onChangeWindowOpacity,
@@ -251,22 +254,44 @@ export function GlassPaneUtilityWindow({
         </div>
       </div>
 
-      {/* Top Row: Theme Toggle Button (left) + Master ON / OFF Switch (right) */}
+      {/* Top Row: Theme Toggle Button + Text Focus Button (left) + Master ON / OFF Switch (right) */}
       <div className="flex items-center justify-between px-4 pt-1 pb-3">
-        <button
-          type="button"
-          onClick={onToggleTheme}
-          aria-label={`Switch to ${isLight ? 'dark' : 'light'} Windows 11 theme`}
-          title="Toggle Windows 11 Dark / Light Mica Theme"
-          className={`px-3 py-1.5 rounded-md border text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
-            isLight
-              ? 'bg-slate-200 border-slate-300 text-slate-700 hover:bg-slate-300/80 hover:text-slate-950'
-              : 'bg-[#262931] border-[#343842] text-slate-300 hover:bg-[#2f333d] hover:text-white'
-          }`}
-        >
-          {isLight ? <Moon className="w-3.5 h-3.5" /> : <Sun className="w-3.5 h-3.5" />}
-          <span>{isLight ? 'Dark UI' : 'Light UI'}</span>
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onToggleTheme}
+            aria-label={`Switch to ${isLight ? 'dark' : 'light'} Windows 11 theme`}
+            title="Toggle Windows 11 Dark / Light Mica Theme"
+            className={`px-3 py-1.5 rounded-md border text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+              isLight
+                ? 'bg-slate-200 border-slate-300 text-slate-700 hover:bg-slate-300/80 hover:text-slate-950'
+                : 'bg-[#262931] border-[#343842] text-slate-300 hover:bg-[#2f333d] hover:text-white'
+            }`}
+          >
+            {isLight ? <Moon className="w-3.5 h-3.5" /> : <Sun className="w-3.5 h-3.5" />}
+            <span>{isLight ? 'Dark UI' : 'Light UI'}</span>
+          </button>
+
+          <button
+            type="button"
+            data-testid="text-focus-toggle"
+            aria-pressed={state.textFocusEnabled}
+            onClick={onToggleTextFocus}
+            title="Text Focus: Applies DWM Acrylic backdrop blur, crisp text contrast, and an 82% readability floor on focused/hovered transparent windows"
+            className={`px-3 py-1.5 rounded-md border text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+              state.textFocusEnabled
+                ? isLight
+                  ? 'bg-sky-500/20 border-sky-600 text-sky-950 shadow-xs'
+                  : 'bg-[#3898ff]/20 border-[#3898ff] text-sky-200 shadow-xs'
+                : isLight
+                ? 'bg-slate-200 border-slate-300 text-slate-700 hover:bg-slate-300/80 hover:text-slate-950'
+                : 'bg-[#262931] border-[#343842] text-slate-300 hover:bg-[#2f333d] hover:text-white'
+            }`}
+          >
+            <Type className="w-3.5 h-3.5" />
+            <span>Text Focus</span>
+          </button>
+        </div>
 
         <div className="flex items-center gap-3 pr-2">
           <span

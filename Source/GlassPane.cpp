@@ -48,13 +48,16 @@ constexpr UINT IDI_GLASSPANE_ICON  = 101;
 constexpr UINT WM_TRAYICON         = WM_APP + 1;
 constexpr UINT ID_TRAY_OPEN        = 1001;
 constexpr UINT ID_TRAY_TOGGLE_ALL  = 1002;
+constexpr UINT ID_TRAY_TEXT_FOCUS  = 1005;
 constexpr UINT ID_TRAY_RESTORE_ALL = 1003;
 constexpr UINT ID_TRAY_EXIT        = 1004;
 constexpr UINT ID_TIMER_ENUM       = 3001;
 constexpr UINT ID_TIMER_MARQUEE    = 3002;
+constexpr UINT ID_TIMER_TEXT_FOCUS = 3003;
 
-constexpr int MIN_OPACITY_PCT      = 10;
-constexpr int MAX_OPACITY_PCT      = 100;
+constexpr int MIN_OPACITY_PCT       = 10;
+constexpr int MAX_OPACITY_PCT       = 100;
+constexpr int TEXT_FOCUS_FLOOR_PCT  = 82;
 
 constexpr int CLIENT_WIDTH         = 540;
 constexpr int CLIENT_HEIGHT        = 540;
@@ -194,6 +197,7 @@ struct WindowOpacityState {
     int percent = 75;               // 10% .. 100%
     bool isActive = false;          // Independent ON/OFF state per window (starts OFF / grayscale until clicked or dragged)
     bool addedLayeredStyle = false; // True if GlassPane added WS_EX_LAYERED to this HWND (so it can be cleanly removed)
+    bool addedTextFocusBackdrop = false; // True if GlassPane applied DWM Acrylic/Mica backdrop for Text Focus
 };
 
 struct OpenWindowEntry {
@@ -214,7 +218,10 @@ static UINT g_wmActivateInstance         = 0;
 static UINT g_wmTaskbarCreated           = 0;
 
 static bool g_globalMasterOn             = true;
+static bool g_textFocusMode              = false;
 static bool g_isLightTheme               = false;
+static HWND g_lastFocusedTargetHwnd      = nullptr;
+static HWND g_lastHoveredTargetHwnd      = nullptr;
 static std::vector<OpenWindowEntry> g_openWindows;
 static std::unordered_map<HWND, WindowOpacityState> g_windowStates;
 static std::unordered_map<HWND, Gdiplus::Bitmap*> g_iconCache;
@@ -477,6 +484,25 @@ static bool IsUserApplicationWindow(HWND hwnd) {
     return true;
 }
 
+// Returns true if the target HWND is currently the foreground window or under the mouse cursor
+static bool IsWindowFocusedOrHovered(HWND hwnd) {
+    if (!hwnd || !IsWindow(hwnd)) return false;
+    HWND fg = GetForegroundWindow();
+    if (fg == hwnd) return true;
+
+    POINT pt = {};
+    if (GetCursorPos(&pt)) {
+        HWND underCursor = WindowFromPoint(pt);
+        if (underCursor) {
+            HWND root = GetAncestor(underCursor, GA_ROOT);
+            if (root == hwnd || underCursor == hwnd) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 static void ApplyEffectiveWindowOpacity(HWND hwnd) {
     if (!IsWindow(hwnd)) return;
 
@@ -485,6 +511,11 @@ static void ApplyEffectiveWindowOpacity(HWND hwnd) {
 
     LONG_PTR exStyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
     if (!shouldApply) {
+        if (it != g_windowStates.end() && it->second.addedTextFocusBackdrop) {
+            INT autoBackdrop = 0; // DWMSBT_AUTO
+            DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &autoBackdrop, sizeof(autoBackdrop));
+            it->second.addedTextFocusBackdrop = false;
+        }
         if (exStyle & WS_EX_LAYERED) {
             if (it != g_windowStates.end() && it->second.addedLayeredStyle) {
                 SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
@@ -496,6 +527,27 @@ static void ApplyEffectiveWindowOpacity(HWND hwnd) {
         }
     } else {
         int pct = ClampInt(it->second.percent, MIN_OPACITY_PCT, MAX_OPACITY_PCT);
+
+        // Text Focus Mode (Safe DWM + LWA_ALPHA implementation):
+        // 1. Avoids LWA_COLORKEY (which creates accidental click-through holes) and avoids WC_MAGNIFIER overlays.
+        // 2. Requests Windows 11 DWM Acrylic/Transient backdrop blur behind the transparent window where supported.
+        // 3. Boosts the actively focused or hovered transparent window to a crisp readability floor (82%).
+        if (g_textFocusMode) {
+            if (IsWindowFocusedOrHovered(hwnd) && pct < TEXT_FOCUS_FLOOR_PCT) {
+                pct = TEXT_FOCUS_FLOOR_PCT;
+            }
+            if (!it->second.addedTextFocusBackdrop) {
+                INT acrylicBackdrop = 3; // DWMSBT_TRANSIENTWINDOW (Acrylic blur behind window)
+                if (SUCCEEDED(DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &acrylicBackdrop, sizeof(acrylicBackdrop)))) {
+                    it->second.addedTextFocusBackdrop = true;
+                }
+            }
+        } else if (it->second.addedTextFocusBackdrop) {
+            INT autoBackdrop = 0; // DWMSBT_AUTO
+            DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &autoBackdrop, sizeof(autoBackdrop));
+            it->second.addedTextFocusBackdrop = false;
+        }
+
         BYTE alpha = static_cast<BYTE>((pct * 255) / 100);
 
         // Process Integrity Handling (UIPI):
@@ -541,6 +593,11 @@ static void RestoreAllWindowsOnExit() {
     for (auto& kv : g_windowStates) {
         HWND hwnd = kv.first;
         if (IsWindow(hwnd)) {
+            if (kv.second.addedTextFocusBackdrop) {
+                INT autoBackdrop = 0; // DWMSBT_AUTO
+                DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &autoBackdrop, sizeof(autoBackdrop));
+                kv.second.addedTextFocusBackdrop = false;
+            }
             LONG_PTR exStyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
             if (exStyle & WS_EX_LAYERED) {
                 if (kv.second.addedLayeredStyle) {
@@ -631,11 +688,17 @@ static void RefreshOpenWindowsList() {
     for (auto it = g_windowStates.begin(); it != g_windowStates.end(); ) {
         HWND hwnd = it->first;
         if (!IsWindow(hwnd) || activeHwnds.find(hwnd) == activeHwnds.end()) {
-            if (IsWindow(hwnd) && it->second.addedLayeredStyle) {
-                LONG_PTR exStyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-                if (exStyle & WS_EX_LAYERED) {
-                    SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
-                    SetWindowLongPtrW(hwnd, GWL_EXSTYLE, exStyle & ~WS_EX_LAYERED);
+            if (IsWindow(hwnd)) {
+                if (it->second.addedTextFocusBackdrop) {
+                    INT autoBackdrop = 0; // DWMSBT_AUTO
+                    DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &autoBackdrop, sizeof(autoBackdrop));
+                }
+                if (it->second.addedLayeredStyle) {
+                    LONG_PTR exStyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+                    if (exStyle & WS_EX_LAYERED) {
+                        SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
+                        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, exStyle & ~WS_EX_LAYERED);
+                    }
                 }
             }
             if (g_draggingSliderHwnd == hwnd) {
@@ -710,7 +773,7 @@ static void PaintGlassPaneCanvas(HDC hdc, int width, int height) {
     Gdiplus::Font fontSubtitle(&segoeFamily, 11.5f, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
     Gdiplus::Font fontMono(&monoFamily, 11.0f, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
 
-    // 2. Top Row: Theme Toggle Button (left) + Master ON/OFF Pill Switch (right)
+    // 2. Top Row: Theme Toggle Button + Text Focus Button (left) + Master ON/OFF Pill Switch (right)
     Gdiplus::RectF themeBtnRect(16.0f, 10.0f, 92.0f, 28.0f);
     {
         Gdiplus::GraphicsPath themePath;
@@ -726,6 +789,33 @@ static void PaintGlassPaneCanvas(HDC hdc, int width, int height) {
         sfCenter.SetLineAlignment(Gdiplus::StringAlignmentCenter);
         const wchar_t* themeLabel = g_isLightTheme ? L"\x263E Dark UI" : L"\x2600 Light UI";
         g.DrawString(themeLabel, -1, &fontSubtitle, themeBtnRect, &sfCenter, &themeTextBrush);
+    }
+
+    // Text Focus Button right next to Theme Toggle Button
+    Gdiplus::RectF textFocusBtnRect(116.0f, 10.0f, 102.0f, 28.0f);
+    {
+        Gdiplus::GraphicsPath tfPath;
+        AddRoundedRectPath(tfPath, textFocusBtnRect, 6.0f);
+        Gdiplus::Color tfBgCol = g_textFocusMode
+            ? (g_isLightTheme ? Gdiplus::Color(55, 14, 165, 233) : Gdiplus::Color(55, 56, 152, 255))
+            : (g_isLightTheme ? Gdiplus::Color(255, 226, 232, 240) : Gdiplus::Color(255, 38, 41, 49));
+        Gdiplus::Color tfBorderCol = g_textFocusMode
+            ? (g_isLightTheme ? Gdiplus::Color(255, 2, 132, 199) : Gdiplus::Color(255, 56, 152, 255))
+            : (g_isLightTheme ? Gdiplus::Color(255, 203, 213, 225) : Gdiplus::Color(255, 52, 56, 66));
+        Gdiplus::Color tfTextCol = g_textFocusMode
+            ? (g_isLightTheme ? Gdiplus::Color(255, 12, 74, 110) : Gdiplus::Color(255, 186, 230, 253))
+            : (g_isLightTheme ? Gdiplus::Color(255, 51, 65, 85) : Gdiplus::Color(255, 203, 213, 225));
+
+        Gdiplus::SolidBrush tfBg(tfBgCol);
+        Gdiplus::Pen tfBorder(tfBorderCol, 1.0f);
+        g.FillPath(&tfBg, &tfPath);
+        g.DrawPath(&tfBorder, &tfPath);
+
+        Gdiplus::SolidBrush tfTextBrush(tfTextCol);
+        Gdiplus::StringFormat sfCenter;
+        sfCenter.SetAlignment(Gdiplus::StringAlignmentCenter);
+        sfCenter.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+        g.DrawString(L"T Text Focus", -1, &fontSubtitle, textFocusBtnRect, &sfCenter, &tfTextBrush);
     }
 
     // Master ON/OFF Switch at top-right
@@ -1062,6 +1152,14 @@ static void HandleClientMouseDown(HWND hwnd, int mx, int my) {
         return;
     }
 
+    // 1b. Check Text Focus Toggle Button (116, 10, 102, 28)
+    if (mx >= 116 && mx <= 218 && my >= 10 && my <= 38) {
+        g_textFocusMode = !g_textFocusMode;
+        ApplyAllTrackedWindows();
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return;
+    }
+
     // 2. Check Master ON/OFF Pill Switch at top-right
     int switchRight = width - OUTER_PAD_X - 8;
     int switchLeft = switchRight - 104; // Includes "ON"/"OFF" label + pill
@@ -1198,6 +1296,8 @@ static void ShowTrayContextMenu(HWND hwnd) {
     AppendMenuW(hMenu, MF_STRING, ID_TRAY_OPEN, L"Open GlassPane");
     AppendMenuW(hMenu, MF_STRING, ID_TRAY_TOGGLE_ALL,
                 g_globalMasterOn ? L"Master Opacity: Turn OFF" : L"Master Opacity: Turn ON");
+    AppendMenuW(hMenu, MF_STRING, ID_TRAY_TEXT_FOCUS,
+                g_textFocusMode ? L"Text Focus: Turn OFF" : L"Text Focus: Turn ON");
     AppendMenuW(hMenu, MF_STRING, ID_TRAY_RESTORE_ALL, L"Reset All Windows to 100%");
     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(hMenu, MF_STRING, ID_TRAY_EXIT, L"Exit");
@@ -1233,6 +1333,7 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
     case WM_CREATE:
         SetTimer(hwnd, ID_TIMER_ENUM, 2000, nullptr);
         SetTimer(hwnd, ID_TIMER_MARQUEE, 33, nullptr);
+        SetTimer(hwnd, ID_TIMER_TEXT_FOCUS, 150, nullptr);
         if (g_wmActivateInstance != 0) {
             ChangeWindowMessageFilterEx(hwnd, g_wmActivateInstance, MSGFLT_ALLOW, nullptr);
         }
@@ -1308,6 +1409,19 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 g_marqueeOffsetPx = std::fmod(g_marqueeOffsetPx, 10000.0f);
             }
             InvalidateRect(hwnd, nullptr, FALSE);
+        } else if (wParam == ID_TIMER_TEXT_FOCUS && g_globalMasterOn && g_textFocusMode) {
+            HWND curFg = GetForegroundWindow();
+            HWND curHover = nullptr;
+            POINT pt = {};
+            if (GetCursorPos(&pt)) {
+                HWND hPt = WindowFromPoint(pt);
+                if (hPt) curHover = GetAncestor(hPt, GA_ROOT);
+            }
+            if (curFg != g_lastFocusedTargetHwnd || curHover != g_lastHoveredTargetHwnd) {
+                g_lastFocusedTargetHwnd = curFg;
+                g_lastHoveredTargetHwnd = curHover;
+                ApplyAllTrackedWindows();
+            }
         }
         return 0;
 
@@ -1320,6 +1434,12 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 
         case ID_TRAY_TOGGLE_ALL:
             g_globalMasterOn = !g_globalMasterOn;
+            ApplyAllTrackedWindows();
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+
+        case ID_TRAY_TEXT_FOCUS:
+            g_textFocusMode = !g_textFocusMode;
             ApplyAllTrackedWindows();
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
@@ -1362,6 +1482,7 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
     case WM_DESTROY:
         KillTimer(hwnd, ID_TIMER_ENUM);
         KillTimer(hwnd, ID_TIMER_MARQUEE);
+        KillTimer(hwnd, ID_TIMER_TEXT_FOCUS);
         RestoreAllWindowsOnExit();
         Shell_NotifyIconW(NIM_DELETE, &g_nid);
         g_openWindows.clear();

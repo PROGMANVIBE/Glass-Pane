@@ -4,6 +4,7 @@ import {
   updateWindowOpacity,
   toggleSingleWindowOpacity,
   toggleGlobalMasterOpacity,
+  toggleTextFocusMode,
   openApplicationWindow,
   closeApplicationWindow,
   spawnCustomApplicationWindow,
@@ -48,6 +49,10 @@ export default function App() {
 
   const handleToggleGlobalOpacity = () => {
     setState((prev) => toggleGlobalMasterOpacity(prev));
+  };
+
+  const handleToggleTextFocus = () => {
+    setState((prev) => toggleTextFocusMode(prev));
   };
 
   const handleResetAllOpacities = () => {
@@ -256,6 +261,7 @@ export default function App() {
       <GlassPaneUtilityWindow
         state={state}
         onToggleGlobalOpacity={handleToggleGlobalOpacity}
+        onToggleTextFocus={handleToggleTextFocus}
         onToggleSingleWindow={handleToggleSingleWindow}
         onFocusWindow={handleFocusDesktopWindow}
         onChangeWindowOpacity={handleChangeWindowOpacity}
