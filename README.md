@@ -117,16 +117,3 @@ Write-Host "Built standalone executable: $(Resolve-Path .\GlassPane.exe)" -Foreg
 ```
 
 Once compiled, `GlassPane.exe` is created directly in the project root directory and can be copied or moved anywhere on your Windows 11 PC.
-
-### Automated GitHub Release Builds (`.github/workflows/release.yml`)
-
-This repository includes a GitHub Actions workflow (**`.github/workflows/release.yml`**) that compiles `Source/GlassPane.cpp`, `Source/GlassPane.rc`, and `Source/GlassPane.ico` on a `windows-latest` runner using MinGW-w64 and attaches the standalone **`GlassPane.exe`** binary directly to your GitHub Releases:
-
-1. **Automatic Compilation on New Release**:
-   - Whenever you publish a new release on GitHub, the workflow automatically runs, compiles `GlassPane.exe` from the `/Source` folder, and uploads `GlassPane.exe` as a release asset on that release.
-2. **Manual Run for Any Existing Release (`workflow_dispatch`)**:
-   - Navigate to the **Actions** tab in your GitHub repository and select **Build and Attach GlassPane.exe to Release**.
-   - Click **Run workflow**.
-   - Enter the target release tag (for example, `v1.4.2`, or leave it set to `latest` to automatically target the most recent release) and click **Run workflow**.
-   - The action will compile `GlassPane.exe` from `/Source`, upload it as a downloadable workflow artifact, and attach (or overwrite via `--clobber`) `GlassPane.exe` on the specified release.
-
